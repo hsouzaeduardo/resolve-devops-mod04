@@ -1,0 +1,165 @@
+name: Esteira Reembolso — CI/CD
+
+# ─────────────────────────────────────────────────────────────
+# Fluxo:  build/QA → Dev → Homologação → [APROVAÇÃO MANUAL] → Produção → Pages
+# Gates : ambiente "producao" exige required reviewers (Settings ▸ Environments)
+# Alertas: job notify-failure dispara em qualquer falha (Slack ou Issue)
+# ─────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  issues: write
+
+# Evita dois deploys de Pages simultâneos (não cancela o em andamento).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # 1) Qualidade — roda sempre, barato e rápido (o "gate" de entrada)
+  qa:
+    name: QA / Validação
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validar HTML (tags e placeholders)
+        run: |
+          test -f src/index.html || { echo "index.html ausente"; exit 1; }
+          grep -q "Olá, mundo" src/index.html || { echo "conteúdo esperado ausente"; exit 1; }
+          echo "✓ QA ok"
+
+  # 2) DEV — deploy automático, gera artefato baixável do build de desenvolvimento
+  deploy-dev:
+    name: Deploy · Dev
+    needs: qa
+    runs-on: ubuntu-latest
+    environment:
+      name: dev
+      url: ${{ steps.info.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Build (Desenvolvimento)
+        run: bash scripts/build.sh dev "Desenvolvimento" dist
+      - name: Smoke test
+        run: grep -q "Desenvolvimento" dist/index.html && echo "✓ smoke ok"
+      - name: Secret do ambiente (exemplo)
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}   # secret ESCOPADO ao ambiente dev
+        run: |
+          if [ -n "$APP_BASE_URL" ]; then echo "✓ APP_BASE_URL do ambiente dev carregado"; \
+          else echo "⚠ APP_BASE_URL não configurado (opcional na demo)"; fi
+      - id: info
+        run: echo "url=https://exemplo.dev.reembolso.local" >> "$GITHUB_OUTPUT"
+      - name: Publicar artefato do build Dev
+        uses: actions/upload-artifact@v4
+        with: { name: site-dev, path: dist }
+
+  # 3) HOMOLOGAÇÃO — deploy automático após Dev; artefato de UAT
+  deploy-homolog:
+    name: Deploy · Homologação
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment:
+      name: homologacao
+      url: ${{ steps.info.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Build (Homologação)
+        run: bash scripts/build.sh homolog "Homologação" dist
+      - name: Smoke test
+        run: grep -q "Homologação" dist/index.html && echo "✓ smoke ok"
+      - name: Secret do ambiente (exemplo)
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}   # secret ESCOPADO ao ambiente homologacao
+        run: echo "usando config do ambiente de homologação"
+      - id: info
+        run: echo "url=https://exemplo.homolog.reembolso.local" >> "$GITHUB_OUTPUT"
+      - name: Publicar artefato do build Homologação
+        uses: actions/upload-artifact@v4
+        with: { name: site-homolog, path: dist }
+
+  # 4) PRODUÇÃO — GATE MANUAL. Só roda após aprovação no ambiente "producao".
+  #    Aqui calculamos as métricas DORA e preparamos o artefato do Pages.
+  deploy-prod:
+    name: Deploy · Produção (aprovação manual)
+    needs: deploy-homolog
+    runs-on: ubuntu-latest
+    environment:
+      name: producao          # ← configure "Required reviewers" neste ambiente
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Build (Produção)
+        run: bash scripts/build.sh prod "Produção" dist
+      - name: Smoke test
+        run: grep -q "Produção" dist/index.html && echo "✓ smoke ok"
+      - name: Calcular métricas DORA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "/repos/${{ github.repository }}/actions/workflows/deploy.yml/runs?per_page=100" \
+            | python3 scripts/dora.py 14 > dist/metrics.json || echo '{"sample":true}' > dist/metrics.json
+          echo "✓ metrics.json gerado"
+      - name: Configurar Pages
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: Empacotar artefato do Pages
+        uses: actions/upload-pages-artifact@v3
+        with: { path: dist }
+
+  # 5) PUBLICAÇÃO — deploy efetivo no GitHub Pages (site de produção)
+  publish-pages:
+    name: Publicar no GitHub Pages
+    needs: deploy-prod
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy no Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # 6) ALERTA — dispara se QUALQUER etapa falhar (Slack se houver webhook; senão Issue)
+  notify-failure:
+    name: Alerta de falha
+    needs: [qa, deploy-dev, deploy-homolog, deploy-prod, publish-pages]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar canal de alerta
+        id: chan
+        env:
+          SLACK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -n "$SLACK" ]; then echo "slack=true" >> "$GITHUB_OUTPUT"; \
+          else echo "slack=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Notificar no Slack
+        if: steps.chan.outputs.slack == 'true'
+        env:
+          SLACK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -sf -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"🔴 Esteira Reembolso falhou — run ${{ github.run_number }} (${{ github.sha }}). ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            "$SLACK"
+      - name: Abrir Issue de incidente (fallback)
+        if: steps.chan.outputs.slack == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "🔴 Falha na esteira — run #${{ github.run_number }}" \
+            --label "incidente,deploy" \
+            --body "Falha detectada no run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Commit: ${{ github.sha }}." \
+            || echo "não foi possível abrir issue (verifique a label)"

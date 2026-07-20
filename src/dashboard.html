@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboard DORA · App de Reembolso</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root{
+      --bg:#0b1220;--bg-2:#0e1729;--surface:#111c31;--surface-2:#16233d;--border:#22314f;
+      --text:#e6edf7;--muted:#8ca0bd;--cyan:#22d3ee;
+      --green:#22c55e;--amber:#f59e0b;--red:#ef4444;--blue:#3b82f6;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;min-height:100vh;color:var(--text);
+      background:linear-gradient(180deg,var(--bg-2),var(--bg));
+      font-family:"Inter",system-ui,sans-serif;padding:32px 20px 48px;
+    }
+    .wrap{max-width:940px;margin:0 auto}
+    header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:6px}
+    h1{font-family:"Space Grotesk","Inter",sans-serif;font-weight:700;font-size:30px;letter-spacing:-0.02em;margin:0}
+    .src{font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--muted)}
+    .src b{color:var(--cyan)}
+    .sub{color:var(--muted);font-size:14.5px;margin:4px 0 28px}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+    @media (max-width:720px){.grid{grid-template-columns:1fr}}
+    .kpi{
+      background:linear-gradient(180deg,var(--surface),var(--bg-2));
+      border:1px solid var(--border);border-radius:16px;padding:22px 22px 20px;position:relative;
+    }
+    .kpi .label{font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+    .kpi .value{font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:46px;line-height:1;margin:14px 0 6px}
+    .kpi .unit{font-size:16px;color:var(--muted);font-weight:600;margin-left:4px}
+    .kpi .hint{font-size:12.5px;color:var(--muted);font-family:"JetBrains Mono",monospace}
+    .tier{
+      position:absolute;top:20px;right:20px;font-size:11px;font-weight:700;letter-spacing:0.06em;
+      text-transform:uppercase;padding:4px 9px;border-radius:999px;
+    }
+    .tier.elite{color:var(--green);background:rgba(34,197,94,.14);border:1px solid rgba(34,197,94,.4)}
+    .tier.high{color:var(--blue);background:rgba(59,130,246,.14);border:1px solid rgba(59,130,246,.4)}
+    .tier.medium{color:var(--amber);background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.4)}
+    .tier.low{color:var(--red);background:rgba(239,68,68,.14);border:1px solid rgba(239,68,68,.4)}
+    .bar{height:6px;border-radius:999px;background:var(--surface-2);overflow:hidden;margin-top:14px}
+    .bar > span{display:block;height:100%;border-radius:999px}
+    .panel{
+      margin-top:22px;background:linear-gradient(180deg,var(--surface),var(--bg-2));
+      border:1px solid var(--border);border-radius:16px;padding:20px 22px;
+    }
+    .panel h2{font-family:"Space Grotesk",sans-serif;font-size:17px;margin:0 0 4px}
+    .panel p{color:var(--muted);font-size:13.5px;margin:0 0 16px}
+    .spark{display:flex;align-items:flex-end;gap:5px;height:96px}
+    .spark .col{flex:1;border-radius:5px 5px 0 0;min-height:4px;transition:height .3s}
+    .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--muted);font-family:"JetBrains Mono",monospace}
+    .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+    .note{margin-top:22px;font-size:12.5px;color:var(--muted);font-family:"JetBrains Mono",monospace}
+    a.back{color:var(--cyan);text-decoration:none;font-size:13px}
+    a.back:hover{text-decoration:underline}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Dashboard DORA</h1>
+      <span class="src" id="source">fonte: <b>carregando…</b></span>
+    </header>
+    <p class="sub">Saúde de entrega do App de Reembolso — janela dos últimos <b id="window">14</b> dias. <a class="back" href="./index.html">← voltar</a></p>
+
+    <div class="grid" id="kpis"></div>
+
+    <div class="panel">
+      <h2>Deploys por dia</h2>
+      <p>Sucesso vs. falha por dia — base para Deploy Frequency e Change Failure Rate.</p>
+      <div class="spark" id="spark"></div>
+      <div class="legend">
+        <span><i style="background:var(--green)"></i>deploy ok</span>
+        <span><i style="background:var(--red)"></i>deploy com falha</span>
+      </div>
+    </div>
+
+    <p class="note" id="note"></p>
+  </div>
+
+  <script>
+    // Dados de exemplo — usados quando metrics.json ainda não existe (primeiro deploy).
+    const SAMPLE = {
+      generated_at: null,
+      window_days: 14,
+      sample: true,
+      deploy_frequency_per_week: 6.5,
+      change_failure_rate: 0.14,
+      mttr_hours: 2.3,
+      lead_time_hours: 4.1,
+      daily: [
+        {d:"08/07",ok:1,fail:0},{d:"09/07",ok:2,fail:1},{d:"10/07",ok:1,fail:0},
+        {d:"11/07",ok:0,fail:0},{d:"12/07",ok:2,fail:0},{d:"13/07",ok:1,fail:1},
+        {d:"14/07",ok:3,fail:0},{d:"15/07",ok:1,fail:0},{d:"16/07",ok:2,fail:0},
+        {d:"17/07",ok:1,fail:1},{d:"18/07",ok:2,fail:0},{d:"19/07",ok:1,fail:0}
+      ]
+    };
+
+    function tierFreq(v){ return v>=7?["elite","Elite"]:v>=1?["high","Alto"]:v>=0.25?["medium","Médio"]:["low","Baixo"]; }
+    function tierCFR(v){ return v<=0.15?["elite","Elite"]:v<=0.30?["high","Alto"]:v<=0.45?["medium","Médio"]:["low","Baixo"]; }
+    function tierMTTR(h){ return h<1?["elite","Elite"]:h<24?["high","Alto"]:h<168?["medium","Médio"]:["low","Baixo"]; }
+
+    function render(m){
+      document.getElementById("window").textContent = m.window_days;
+      document.getElementById("source").innerHTML = m.sample
+        ? 'fonte: <b>dados de exemplo</b>'
+        : 'fonte: <b>metrics.json</b> · ' + new Date(m.generated_at).toLocaleString('pt-BR');
+
+      const cfrPct = Math.round(m.change_failure_rate*100);
+      const kpis = [
+        {label:"Deploy Frequency", value:m.deploy_frequency_per_week.toFixed(1), unit:"/sem",
+         hint:"deploys de produção por semana", tier:tierFreq(m.deploy_frequency_per_week), color:"var(--green)", pct:Math.min(100,m.deploy_frequency_per_week/7*100)},
+        {label:"Change Failure Rate", value:cfrPct, unit:"%",
+         hint:"% de deploys que falharam", tier:tierCFR(m.change_failure_rate), color:"var(--amber)", pct:Math.min(100,cfrPct*2)},
+        {label:"MTTR", value:m.mttr_hours.toFixed(1), unit:"h",
+         hint:"tempo médio de recuperação", tier:tierMTTR(m.mttr_hours), color:"var(--cyan)", pct:Math.min(100,100-Math.min(100,m.mttr_hours/24*100))}
+      ];
+      document.getElementById("kpis").innerHTML = kpis.map(k=>`
+        <div class="kpi">
+          <span class="tier ${k.tier[0]}">${k.tier[1]}</span>
+          <div class="label">${k.label}</div>
+          <div class="value">${k.value}<span class="unit">${k.unit}</span></div>
+          <div class="hint">${k.hint}</div>
+          <div class="bar"><span style="width:${k.pct}%;background:${k.color}"></span></div>
+        </div>`).join("");
+
+      const max = Math.max(1,...m.daily.map(d=>d.ok+d.fail));
+      document.getElementById("spark").innerHTML = m.daily.map(d=>{
+        const h = (d.ok+d.fail)/max*96;
+        const okH = (d.ok+d.fail)>0 ? d.ok/(d.ok+d.fail)*100 : 0;
+        return `<div class="col" title="${d.d}: ${d.ok} ok / ${d.fail} falha"
+          style="height:${Math.max(4,h)}px;background:linear-gradient(180deg,var(--red) ${100-okH}%,var(--green) ${100-okH}%)"></div>`;
+      }).join("");
+
+      document.getElementById("note").textContent = m.sample
+        ? "Exibindo dados de exemplo. Após o primeiro deploy de produção, a esteira grava metrics.json com números reais."
+        : "Métricas calculadas a partir dos runs da esteira via GitHub API (workflow deploy.yml).";
+    }
+
+    fetch("./metrics.json", {cache:"no-store"})
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(render)
+      .catch(() => render(SAMPLE));
+  </script>
+</body>
+</html>
