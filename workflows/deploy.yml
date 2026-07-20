@@ -4,6 +4,7 @@ name: Esteira Reembolso — CI/CD
 # Fluxo:  build/QA → Dev → Homologação → [APROVAÇÃO MANUAL] → Produção → Pages
 # Gates : ambiente "producao" exige required reviewers (Settings ▸ Environments)
 # Alertas: job notify-failure dispara em qualquer falha (Slack ou Issue)
+# Alteração para rodar esse pipe
 # ─────────────────────────────────────────────────────────────
 
 on:
